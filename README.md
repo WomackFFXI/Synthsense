@@ -59,6 +59,7 @@ Manual Adjustment examples:
 * add 5 HQ1: //ss add hq1 5
 * add 2 break: //ss add break 2
 *subtract/fix error: //ss add nq -1 or //ss add break -2
+
 **Use Negative Numbers to subtract from Counts**
 
 ---
