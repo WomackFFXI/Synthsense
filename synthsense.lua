@@ -1,11 +1,12 @@
 _addon.name = 'SynthSense'
 _addon.author = 'Womack'
-_addon.version = '2.6'
+_addon.version = '2.7'
 _addon.commands = {'synthsense', 'ss'}
 
 local packets = require('packets')
 local texts = require('texts')
 local config = require('config')
+local res = require('resources')
 
 -- Default Settings & Persistent Data
 local defaults = {
@@ -16,8 +17,11 @@ local defaults = {
         hq1 = 0,
         hq2 = 0,
         hq3 = 0,
-        total = 0
-    }
+        total = 0,
+        lost = 0,        -- Total material units lost
+        loss_breaks = 0  -- Breaks where at least one material was lost
+    },
+    lost_items = {}      -- Per-item loss counts, keyed 'i<item id>'
 }
 
 -- Load saved statistics and UI coordinates on startup
@@ -49,10 +53,12 @@ local function update_display()
     local hq3_pct = (s.hq3 / total) * 100
     local total_hq = s.hq1 + s.hq2 + s.hq3
     local total_hq_pct = (total_hq / total) * 100
+    local loss_break_pct = s.breaks > 0 and (s.loss_breaks / s.breaks) * 100 or 0
 
     local content = string.format(
         "\\cs(255,215,0)  === SYNTH SENSE ===\\cr\n" ..
         "\\cs(255,100,100)Breaks: %4d (%5.1f%%)\\cr\n" ..
+        "\\cs(255,160,80)Mats Lost: %d (%.1f%% of breaks)\\cr\n" ..
         "\\cs(220,220,220)NQ:%4d (%5.1f%%)\\cr\n" ..
         "\\cs(100,255,100)HQ1:%4d (%5.1f%%)\\cr\n" ..
         "\\cs(100,220,255)HQ2:%4d (%5.1f%%)\\cr\n" ..
@@ -61,6 +67,7 @@ local function update_display()
         "\\cs(255,255,255)Total Synths: %d\\cr\n" ..
         "\\cs(255,215,0)Total HQ Rate: %.1f%%\\cr",
         s.breaks, break_pct,
+        s.lost, loss_break_pct,
         s.nq, nq_pct,
         s.hq1, hq1_pct,
         s.hq2, hq2_pct,
@@ -110,6 +117,59 @@ local function record_synth(result_type, amount)
     return true
 end
 
+-- Item name lookup with fallback for unknown IDs
+local function item_name(item_id)
+    local item = res.items[item_id]
+    return item and item.en or ('Item #' .. item_id)
+end
+
+-- Read the 'Lost Item' list from a 0x06F packet and record it.
+-- Offset 0x0A holds 8 little-endian item IDs (one per lost ingredient, 0 = empty slot).
+local function record_lost_items(data)
+    local lost_names = {}
+
+    for i = 0, 7 do
+        local pos = 0x0A + i * 2 + 1 -- +1 because string positions are 1-based
+        local item_id = data:byte(pos) + data:byte(pos + 1) * 256
+        if item_id ~= 0 then
+            local key = 'i' .. item_id
+            settings.lost_items[key] = (tonumber(settings.lost_items[key]) or 0) + 1
+            lost_names[#lost_names + 1] = item_name(item_id)
+        end
+    end
+
+    if #lost_names > 0 then
+        settings.stats.lost = settings.stats.lost + #lost_names
+        settings.stats.loss_breaks = settings.stats.loss_breaks + 1
+        windower.add_to_chat(167, '[SynthSense] Materials lost: ' .. table.concat(lost_names, ', '))
+    else
+        windower.add_to_chat(207, '[SynthSense] Break - no materials lost.')
+    end
+end
+
+-- Print per-item loss totals, most lost first
+local function show_lost_items()
+    local list = {}
+    for key, count in pairs(settings.lost_items) do
+        local item_id = tonumber(tostring(key):match('^i(%d+)$'))
+        count = tonumber(count) or 0
+        if item_id and count > 0 then
+            list[#list + 1] = {name = item_name(item_id), count = count}
+        end
+    end
+
+    if #list == 0 then
+        windower.add_to_chat(207, '[SynthSense] No materials lost yet.')
+        return
+    end
+
+    table.sort(list, function(a, b) return a.count > b.count end)
+    windower.add_to_chat(207, string.format('[SynthSense] Materials lost (%d total):', settings.stats.lost))
+    for _, entry in ipairs(list) do
+        windower.add_to_chat(207, string.format('  %4d x %s', entry.count, entry.name))
+    end
+end
+
 -- Reset function
 local function reset_stats()
     settings.stats.breaks = 0
@@ -118,6 +178,9 @@ local function reset_stats()
     settings.stats.hq2 = 0
     settings.stats.hq3 = 0
     settings.stats.total = 0
+    settings.stats.lost = 0
+    settings.stats.loss_breaks = 0
+    settings.lost_items = {}
     save_stats()
     update_display()
     windower.add_to_chat(207, '[SynthSense] Counters reset to zero.')
@@ -128,8 +191,12 @@ windower.register_event('incoming chunk', function(id, data)
     if id == 0x06F then
         local raw_result = data:byte(5)
 
-        if raw_result == 1 then
+        -- 1 = Fail, 2 = Fail (interrupted), 5 = Fail (crystal lost): all are breaks
+        if raw_result == 1 or raw_result == 2 or raw_result == 5 then
+            record_lost_items(data) -- before record_synth, which saves and redraws
             record_synth('break')
+        elseif raw_result ~= 0 then
+            return -- Cancelled synth (invalid recipe, skill too low, rare, etc.): not counted
         else
             local p = packets.parse('incoming', data)
             if p then
@@ -172,6 +239,8 @@ windower.register_event('addon command', function(command, ...)
         end
     elseif cmd == 'reset' or cmd == 'r' then
         reset_stats()
+    elseif cmd == 'lost' or cmd == 'l' then
+        show_lost_items()
     elseif cmd == 'show' then
         tracker_box:show()
     elseif cmd == 'hide' then
@@ -188,6 +257,7 @@ windower.register_event('addon command', function(command, ...)
     else
         windower.add_to_chat(207, '[SynthSense] Commands:')
         windower.add_to_chat(207, ' //ss add <category> [amount] - Add/subtract stats (e.g. //ss add nq 10 or //ss add break -1)')
+        windower.add_to_chat(207, ' //ss lost - Lists every material lost on breaks, with counts')
         windower.add_to_chat(207, ' //ss reset - Resets all stats to zero')
         windower.add_to_chat(207, ' //ss save - Manually saves current stats/position')
         windower.add_to_chat(207, ' //ss show | hide | toggle - UI controls')
