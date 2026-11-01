@@ -18,10 +18,10 @@ local defaults = {
         hq2 = 0,
         hq3 = 0,
         total = 0,
-        lost = 0,        -- Total material units lost
-        loss_breaks = 0  -- Breaks where at least one material was lost
+        lost = 0, -- Total material units lost
+        loss_breaks = 0 -- Breaks where at least one material was lost
     },
-    lost_items = {}      -- Per-item loss counts, keyed 'i<item id>'
+    lost_items = {} -- Per-item loss counts, keyed 'i<item id>'
 }
 
 -- Load saved statistics and UI coordinates on startup
@@ -56,13 +56,13 @@ local function update_display()
     local loss_break_pct = s.breaks > 0 and (s.loss_breaks / s.breaks) * 100 or 0
 
     local content = string.format(
-        "\\cs(255,215,0)  === SYNTH SENSE ===\\cr\n" ..
+        "\\cs(255,215,0)=== SYNTHSENSE v2.7 ===\\cr\n" ..
         "\\cs(255,100,100)Breaks: %4d (%5.1f%%)\\cr\n" ..
         "\\cs(255,160,80)Mats Lost: %d (%.1f%% of breaks)\\cr\n" ..
-        "\\cs(220,220,220)NQ:%4d (%5.1f%%)\\cr\n" ..
-        "\\cs(100,255,100)HQ1:%4d (%5.1f%%)\\cr\n" ..
-        "\\cs(100,220,255)HQ2:%4d (%5.1f%%)\\cr\n" ..
-        "\\cs(255,130,255)HQ3:%4d (%5.1f%%)\\cr\n" ..
+        "\\cs(220,220,220)NQ: %4d (%5.1f%%)\\cr\n" ..
+        "\\cs(100,255,100)HQ1: %4d (%5.1f%%)\\cr\n" ..
+        "\\cs(100,220,255)HQ2: %4d (%5.1f%%)\\cr\n" ..
+        "\\cs(255,130,255)HQ3: %4d (%5.1f%%)\\cr\n" ..
         "-----------------------\n" ..
         "\\cs(255,255,255)Total Synths: %d\\cr\n" ..
         "\\cs(255,215,0)Total HQ Rate: %.1f%%\\cr",
@@ -117,19 +117,18 @@ local function record_synth(result_type, amount)
     return true
 end
 
--- Item name lookup with fallback for unknown IDs
+-- Item name lookup helper
 local function item_name(item_id)
     local item = res.items[item_id]
     return item and item.en or ('Item #' .. item_id)
 end
 
--- Read the 'Lost Item' list from a 0x06F packet and record it.
--- Offset 0x0A holds 8 little-endian item IDs (one per lost ingredient, 0 = empty slot).
+-- Read the 'Lost Item' list from the 0x06F packet structure
 local function record_lost_items(data)
     local lost_names = {}
 
     for i = 0, 7 do
-        local pos = 0x0A + i * 2 + 1 -- +1 because string positions are 1-based
+        local pos = 0x0A + i * 2 + 1
         local item_id = data:byte(pos) + data:byte(pos + 1) * 256
         if item_id ~= 0 then
             local key = 'i' .. item_id
@@ -141,13 +140,10 @@ local function record_lost_items(data)
     if #lost_names > 0 then
         settings.stats.lost = settings.stats.lost + #lost_names
         settings.stats.loss_breaks = settings.stats.loss_breaks + 1
-        windower.add_to_chat(167, '[SynthSense] Materials lost: ' .. table.concat(lost_names, ', '))
-    else
-        windower.add_to_chat(207, '[SynthSense] Break - no materials lost.')
     end
 end
 
--- Print per-item loss totals, most lost first
+-- Print per-item loss totals sorted by highest count first
 local function show_lost_items()
     local list = {}
     for key, count in pairs(settings.lost_items) do
@@ -166,7 +162,7 @@ local function show_lost_items()
     table.sort(list, function(a, b) return a.count > b.count end)
     windower.add_to_chat(207, string.format('[SynthSense] Materials lost (%d total):', settings.stats.lost))
     for _, entry in ipairs(list) do
-        windower.add_to_chat(207, string.format('  %4d x %s', entry.count, entry.name))
+        windower.add_to_chat(207, string.format(' %4d x %s', entry.count, entry.name))
     end
 end
 
@@ -191,12 +187,9 @@ windower.register_event('incoming chunk', function(id, data)
     if id == 0x06F then
         local raw_result = data:byte(5)
 
-        -- 1 = Fail, 2 = Fail (interrupted), 5 = Fail (crystal lost): all are breaks
         if raw_result == 1 or raw_result == 2 or raw_result == 5 then
-            record_lost_items(data) -- before record_synth, which saves and redraws
+            record_lost_items(data)
             record_synth('break')
-        elseif raw_result ~= 0 then
-            return -- Cancelled synth (invalid recipe, skill too low, rare, etc.): not counted
         else
             local p = packets.parse('incoming', data)
             if p then
