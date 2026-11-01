@@ -56,7 +56,7 @@ local function update_display()
     local loss_break_pct = s.breaks > 0 and (s.loss_breaks / s.breaks) * 100 or 0
 
     local content = string.format(
-        "\\cs(255,215,0)=== SYNTHSENSE v2.7 ===\\cr\n" ..
+        "\\cs(255,215,0)    === SYNTH SENSE===\\cr\n" ..
         "\\cs(255,100,100)Breaks: %4d (%5.1f%%)\\cr\n" ..
         "\\cs(255,160,80)Mats Lost: %d (%.1f%% of breaks)\\cr\n" ..
         "\\cs(220,220,220)NQ: %4d (%5.1f%%)\\cr\n" ..
